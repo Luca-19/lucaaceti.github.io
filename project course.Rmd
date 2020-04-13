@@ -1,0 +1,137 @@
+---
+title="Practical Machine Learning"
+author="Luca Aceti"
+date="April 14,2020"
+output=html_document
+---
+# Practical Machine Learning project
+Author: Luca Aceti
+Date: April 14, 2020
+
+## Introduction
+The goal of the project is to predict the manner in which the personal fitness activity is done, using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The "classe" variable is the outcome of the data set and classifies 5 ways to perfom barbell lifts. 
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har.
+
+## Import data
+The data are available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv and
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv.
+I copy the data on my desktop and then I import the data, removing the empty columns.
+
+
+```{r eval=TRUE,warning=FALSE}
+training<-read.csv("D:/coursera machine learning course/pml-training.csv",sep=",", header=TRUE, na.strings = c("NA","",'#DIV/0!'))
+testing<-read.csv("D:/coursera machine learning course/pml-testing.csv",sep=",", header=TRUE, na.strings = c("NA","",'#DIV/0!'))
+training<-training[,(colSums(is.na(training)) == 0)]
+testing<-testing[,(colSums(is.na(testing)) == 0)]
+library(caret)
+library(dplyr)
+library(corrplot)
+```
+
+## Clean and preprocess the data
+In order to be sure that the data don't contain missing values within the rows and columns, I've used the preProcess function and I've applied the knn technique on the training data.
+Then I've removed predictors that have a single unique value (zero variance predictors) or without an informative content (fore example: user name).
+
+```{r eval=TRUE}
+train_pre_obj <- preProcess(training, method = "knnImpute", k = 10)
+training2 <- predict(train_pre_obj, training)
+testing2 <- predict(train_pre_obj, testing)
+
+col_cancel<-nearZeroVar(training2)
+col_cancel<-c(1,2,3,4,5,col_cancel)
+training2<-training2[,-col_cancel]
+testing2<-testing2[,-col_cancel]
+```
+
+## Correlation
+Before going ahead with the analysis, I've checked the correlation between predictors. There are any predictors which present an high correlation: I don't remove them but I take into consideration this fact in the model selection.
+
+```{r eval=TRUE}
+numeric<-training2 %>% select_if(~is.numeric(.x))
+correlations<-cor(numeric)
+corrplot(correlations, order = "hclust", cl.pos = "n", tl.pos = "n") 
+highCorr<-findCorrelation(correlations,cutoff=.9)
+highCorr
+```
+
+## Data slicing
+I create a data partition of the training data set in order to fit the models on the training subset and then evaluate their accuracy on the test partition.
+
+```{r eval=FALSE}
+set.seed(619)
+inTrain<-createDataPartition(y=training2$classe,p=0.7,list=FALSE)
+train1<-training2[inTrain,]
+test1<-training2[-inTrain,]
+```
+
+## Model selection
+For the model selection I consider six candidates. I start from a simple tree with or without a pre processing using PCA.I would evaluate if PCA, reducing correlation between covariates, improve the accuracy. It doesn't happen: the results seems to be in general very poor, but tree model with PCA pre processing presents the worst outcome.
+Then I choose to use LDA model and its non-linear variants QDA and MDA, that should perform better, considering the dataset with a lot of covariates. In fact the accuracy of QDA model on the test data is promising: higher than 88%.
+I complete the analysis with a more complex model: random forest. In this case the accuracy is very high, more than 99%.
+
+```{r eval=FALSE}
+modfit1<-train(classe~.,data=train1,method="rpart")
+modfit2<-train(classe~.,data=train1,method="rpart",preProc=c("pca"))
+modfit3<-train(classe~.,data=train1,method="lda")
+modfit4<-train(classe~.,data=train1,method="qda")
+modfit5<-train(classe~.,data=train1,method="mda")
+modfit6<-train(classe~.,data=train1,method="rf",ntrees=100,importance=TRUE)
+
+pred1<-predict(modfit1,newdata=test1)
+acc<-as.matrix(confusionMatrix(pred1,test1$classe))
+fit_rpart<-sum(diag(acc))/sum(acc)
+
+pred2<-predict(modfit2,newdata=test1)
+acc<-as.matrix(confusionMatrix(pred2,test1$classe))
+fit_rpart2<-sum(diag(acc))/sum(acc)
+
+pred3<-predict(modfit3,newdata=test1)
+acc<-as.matrix(confusionMatrix(pred3,test1$classe))
+fit_lda<-sum(diag(acc))/sum(acc)
+
+pred4<-predict(modfit4,newdata=test1)
+acc<-as.matrix(confusionMatrix(pred4,test1$classe))
+fit_qda<-sum(diag(acc))/sum(acc)
+
+pred5<-predict(modfit5,newdata=test1)
+acc<-as.matrix(confusionMatrix(pred5,test1$classe))
+fit_mda<-sum(diag(acc))/sum(acc)
+
+pred6<-predict(modfit6,newdata=test1)
+acc<-as.matrix(confusionMatrix(pred6,test1$classe))
+fit_rf<-sum(diag(acc))/sum(acc)
+```
+
+## Results
+I compare the results of the candidate models: the best one is random forest, as highlighted in the graph below. The expected out of sample accuracy is 99.4%.
+
+```{r eval=TRUE}
+accuracy<-c(0.4973662,0.3891249,0.6953217,0.8837723,0.7655055,0.9937128)
+method<-c("fit_rpart","fit_rpart2","fit_lda","fit_qda","fit_mda","fit_rf")
+
+data <- data.frame(
+  x=method,
+  y=accuracy
+)
+
+data <- data %>%
+  arrange(y) %>%
+  mutate(x=factor(x,x))
+
+ggplot(data, aes(x=x, y=y)) +
+  geom_segment( aes(x=x, xend=x, y=0, yend=y), color="blue") +
+  geom_point( color="orange", size=4) +
+  theme_bw() +
+  coord_flip()+
+  xlab("") +
+  ylab("accuracy")
+```
+
+## Prediction out of sample
+At the end I've made the prediction out of sample on the 20 cases included in the pml-testing file using the random forest model for the final validation.
+
+
+```{r eval=FALSE}
+final<-predict(modfit6,newdata=testing2)
+final
+```
